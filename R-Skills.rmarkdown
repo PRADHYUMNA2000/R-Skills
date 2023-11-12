@@ -1,0 +1,305 @@
+---
+title: "Pradhyumna Rao"
+---
+
+## R Skills Assessment
+
+```{r}
+library(dplyr)
+library(readr)
+library(waldo)
+library(ggplot2)
+```
+
+```{r}
+tag      <- "202311081903"
+base_url <- "https://github.com/randrescastaneda/pub_data/raw/"
+data_url <- paste0(base_url, tag, "/data/Rtest1/")
+
+wdi <-
+  readr::read_rds(paste0(data_url, "wdi_in1.Rds"))
+```
+
+```{r}
+wdi
+```
+
+```{r}
+names(wdi)
+```
+
+### Question 1
+
+```{r}
+## Calculting Summary Statistics
+stats <- wdi %>%
+  group_by(region, year = date) %>%
+  summarise(
+    N = n(),
+    Mean = mean(gdp, na.rm = TRUE),
+    SD = sd(gdp, na.rm = TRUE),
+    Min = min(gdp, na.rm = TRUE),
+    Max = max(gdp, na.rm = TRUE)
+    )
+stats
+```
+
+```{r}
+expected_results <- readr::read_rds(paste0(data_url, "wdi_summ_out.Rds"))
+comparison <- waldo::compare(stats, expected_results)
+print(comparison)
+```
+
+### Question 2
+
+```{r}
+weighted_mean <- function(x, w) {
+  sum(x * w, na.rm = TRUE) / sum(w, na.rm = TRUE)
+}
+weighted_median <- function(x, w) {
+  data_frame <- data.frame(x, w)
+  sorted_data <- data_frame[order(data_frame$x),]
+  cum_weights <- cumsum(sorted_data$w)
+  total_weight <- sum(w, na.rm = TRUE)
+  median_index <- which(cum_weights >= total_weight / 2)[1]
+}
+
+agg_stats <- wdi %>%
+  group_by(region, date) %>%
+  summarise(
+    pop = sum(pop, na.rm = TRUE), 
+    mean_lifeex = weighted_mean(lifeex, pop),
+    sd_lifeex = sd(lifeex, na.rm = TRUE),
+    min_lifeex = min(lifeex, na.rm = TRUE),
+    max_lifeex = max(lifeex, na.rm = TRUE),
+    median_lifeex = weighted_median(lifeex, pop),
+    mean_gdp = weighted_mean(gdp, pop),
+    sd_gdp = sd(gdp, na.rm = TRUE),
+    min_gdp = min(gdp, na.rm = TRUE),
+    max_gdp = max(gdp, na.rm = TRUE),
+    median_gdp = weighted_median(gdp, pop),
+    mean_pov_intl = weighted_mean(pov_intl, pop),
+    sd_pov_intl = sd(pov_intl, na.rm = TRUE),
+    min_pov_intl = min(pov_intl, na.rm = TRUE),
+    max_pov_intl = max(pov_intl, na.rm = TRUE),
+    median_pov_intl = weighted_median(pov_intl, pop)
+  ) %>%
+  ungroup()
+
+agg_stats
+```
+
+### Question 3
+
+```{r}
+## Creating Outliers Function
+find_outliers <- function(x, weights) {
+  mean_x <- sum(x * weights, na.rm = TRUE) / sum(weights, na.rm = TRUE)
+  sd_x <- sqrt(sum(weights * (x - mean_x)^2, na.rm = TRUE) / sum(weights, na.rm = TRUE))
+
+    lower_bound <- mean_x - 2.5 * sd_x
+  upper_bound <- mean_x + 2.5 * sd_x
+  outliers <- x < lower_bound | x > upper_bound
+
+  return(outliers)
+}
+
+# Calculating Outliers for each Variable
+outliers_lifeex <- find_outliers(wdi$lifeex, wdi$pop)
+outliers_gdp <- find_outliers(wdi$gdp, wdi$pop)
+outliers_gini <- find_outliers(wdi$gini, wdi$pop)
+
+# Creating a Dataframe with Outliers
+outliers_data <- data.frame(
+  year = wdi$date,
+  outliers_lifeex = outliers_lifeex,
+  outliers_gdp = outliers_gdp,
+  outliers_gini = outliers_gini
+)
+
+outliers_data
+```
+
+```{r}
+# Calculating Mean and SD for the Lifeex variable
+wdi <- wdi %>%
+  group_by(date) %>%
+  mutate(
+    weighted_mean_lifeex = weighted.mean(lifeex, pop, na.rm = TRUE),
+    weighted_sd_lifeex = sqrt(weighted.mean((lifeex - weighted_mean_lifeex)^2, pop, na.rm = TRUE))
+  ) %>%
+  ungroup()
+
+# Setting the Confidence Interval
+wdi <- wdi %>%
+  mutate(
+    ci_lower = weighted_mean_lifeex - 2.5 * weighted_sd_lifeex,
+    ci_upper = weighted_mean_lifeex + 2.5 * weighted_sd_lifeex
+  )
+
+# Plotting the Curve
+ggplot(wdi, aes(x = date, y = lifeex, color = region)) +
+  geom_point(alpha = 0.5) + 
+  geom_line(aes(y = weighted_mean_lifeex), size = 1) + 
+  geom_ribbon(aes(ymin = ci_lower, ymax = ci_upper), alpha = 0.1, fill = "grey") + 
+  scale_x_continuous(breaks = seq(min(wdi$date), max(wdi$date), by = 5)) + 
+  theme_minimal() + 
+  labs(
+    title = "Life Expectancy Over Time by Region",
+    x = "date",
+    y = "mean_lifeex",
+    color = "Region"
+  ) +
+  scale_color_brewer(palette = "Set1") 
+```
+
+#### Loading other Dataset
+
+```{r}
+tag      <- "202311081903"
+base_url <- "https://github.com/randrescastaneda/pub_data/raw/"
+data_url <- paste0(base_url, tag, "/data/Rtest1/")
+
+dt <- readr::read_rds(paste0(data_url, "svy_sim_in1.Rds"))
+```
+
+```{r}
+dt
+```
+
+### Question 4
+
+```{r}
+poverty_lines <- c(2.15, 3.65, 6.85)
+
+calculate_FGT_indices <- function(df, income_column, weight_column, poverty_line) {
+  shortfall <- pmax(poverty_line - df[[income_column]], 0)
+  weights <- df[[weight_column]]
+  
+  headcount <- sum(weights * (shortfall > 0), na.rm = TRUE) / sum(weights, na.rm = TRUE)
+  povgap <- sum(weights * shortfall, na.rm = TRUE) / sum(weights, na.rm = TRUE)
+  povseverity <- sum(weights * (shortfall^2), na.rm = TRUE) / sum(weights, na.rm = TRUE)
+  
+  povgap <- povgap / poverty_line
+  povseverity <- povseverity / (poverty_line^2)
+  
+  return(list(headcount = headcount, povgap = povgap, povseverity = povseverity))
+}
+
+results_list <- lapply(seq_along(dt), function(i) {
+  df <- dt[[i]]
+  lapply(poverty_lines, function(line) {
+    c(calculate_FGT_indices(df, "income", "weight", line), year = 2000 + i, pov_line = line)
+  })
+})
+
+final_results <- bind_rows(results_list) %>%
+  select(year, pov_line, headcount, povgap, povseverity)
+
+print(final_results)
+```
+
+```{r}
+ggplot(final_results, aes(x = year, y = headcount, group = pov_line, color = as.factor(pov_line))) +
+  geom_line() +  
+  geom_point() + 
+  scale_color_manual(values = c("2.15" = "red", "3.65" = "green", "6.85" = "blue")) +
+  labs(color = "Poverty Line", x = "Year", y = "Headcount") +
+  theme_minimal()  
+```
+
+```{r}
+expected_results <- readr::read_rds(paste0(data_url, "dt_pov_out.Rds"))
+comparison <- waldo::compare(final_results, expected_results)
+print(comparison)
+```
+
+### Question 5
+
+```{r}
+
+# Lorenz Curve Function
+
+calculate_lorenz_data <- function(income) {
+  sorted_income <- sort(income)
+
+  cum_income <- cumsum(sorted_income)
+  total_income <- sum(sorted_income)
+
+  cum_share_income <- cum_income / total_income
+
+  n <- length(income)
+  percentiles <- seq(from = 1, to = n) / n
+
+  lorenz_data <- data.frame(
+    percentile = seq(from = 1, to = 100),
+    cum_population = percentiles * 100,
+    cum_share_income = approx(percentiles, cum_share_income, xout = seq(0, 1, length.out = 100))
+  )
+
+  return(lorenz_data)
+}
+```
+
+### Replicating the Graph
+
+```{r}
+wdi_lorenz  <- readr::read_rds(paste0(data_url, "dt_lorenz_out.Rds"))
+```
+
+```{r}
+ggplot(wdi_lorenz, aes(x = cum_population, y = cum_welfare, group = as.factor(year), color = as.factor(year))) +
+  geom_line() +  
+  scale_color_viridis_d(begin = 0.2, end = 1, direction = -1, option = "C") + 
+  labs(
+    x = "cum_population",
+    y = "cum_welfare",
+    color = "Year"
+  ) +
+  theme_minimal() +  
+  theme(legend.position = "bottom")  
+```
+
+### Question 6
+
+```{r}
+# Gini Coefficient Function 
+calculate_gini <- function(income, weight) {
+  ordered <- order(income)
+  income <- income[ordered]
+  weight <- weight[ordered]
+  
+  cum_weighted_income <- cumsum(weight * income)
+  total_weighted_income <- sum(weight * income)
+
+  cum_population <- cumsum(weight) / sum(weight)
+  
+  G <- 1 - sum((cum_population[-length(cum_population)] + cum_population[-1]) * diff(cum_weighted_income / total_weighted_income))
+  return(G)
+}
+
+gini_coefficients <- sapply(dt, function(d) calculate_gini(d$income, d$weight))
+
+years <- 2001:2010
+
+gini_results <- data.frame(year = years, gini = gini_coefficients*-1)
+
+gini_results
+```
+
+```{r}
+# Plotting the Graph
+gini_plot <- ggplot(gini_results, aes(x = year, y = gini)) +
+  geom_line() + 
+  geom_point() +  
+  theme_minimal() + 
+  labs(x = "Year", y = "Gini")  
+
+print(gini_plot)
+```
+
+```{r}
+expected_results <- readr::read_rds(paste0(data_url, "dt_gini_out.Rds"))
+comparison <- waldo::compare(gini_results, expected_results)
+print(comparison)
+```
